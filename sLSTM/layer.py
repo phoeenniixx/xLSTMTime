@@ -2,12 +2,15 @@ import torch
 import torch.nn as nn
 from .cell import sLSTMCell
 
+
 class sLSTMLayer(nn.Module):
     """
     Enhanced sLSTM Layer that supports multiple sLSTM cells across timesteps and residual connections.
     """
 
-    def __init__(self, input_size, hidden_size, num_layers=1, dropout=0.0, use_layer_norm=True, use_residual=True, device=None):
+    def __init__(
+        self, input_size, hidden_size, num_layers=1, dropout=0.0, use_layer_norm=True, use_residual=True, device=None
+    ):
         super(sLSTMLayer, self).__init__()
         self.input_size = input_size
         self.hidden_size = hidden_size
@@ -15,21 +18,29 @@ class sLSTMLayer(nn.Module):
         self.dropout = dropout
         self.use_layer_norm = use_layer_norm
         self.use_residual = use_residual
-        self.device = device if device else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.device = device if device else torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        self.cells = nn.ModuleList([sLSTMCell(
-            input_size if layer == 0 else hidden_size,
-            hidden_size,
-            dropout=dropout,
-            use_layer_norm=use_layer_norm,
-            device=self.device
-        ) for layer in range(num_layers)])
+        self.input_projection = None
+        if self.use_residual and input_size != hidden_size:
+            self.input_projection = nn.Linear(input_size, hidden_size, bias=False).to(self.device)
 
-        if self.use_residual:
-            self.res_proj = nn.ModuleList([nn.Linear(hidden_size, hidden_size, bias=False).to(self.device) for _ in range(num_layers)])
+        self.cells = nn.ModuleList(
+            [
+                sLSTMCell(
+                    input_size if layer == 0 else hidden_size,
+                    hidden_size,
+                    dropout=dropout,
+                    use_layer_norm=use_layer_norm,
+                    device=self.device,
+                )
+                for layer in range(num_layers)
+            ]
+        )
 
         if self.use_layer_norm:
-            self.layer_norm_layers = nn.ModuleList([nn.LayerNorm(hidden_size).to(self.device) for _ in range(num_layers)])
+            self.layer_norm_layers = nn.ModuleList(
+                [nn.LayerNorm(hidden_size).to(self.device) for _ in range(num_layers)]
+            )
 
     def forward(self, x, h=None, c=None):
         """
@@ -55,16 +66,23 @@ class sLSTMLayer(nn.Module):
 
         for t in range(seq_len):
             input_t = x[t]
+            layer_input = input_t
+
             for layer in range(self.num_layers):
-                h[layer], c[layer] = self.cells[layer](input_t, h[layer], c[layer])
+                h[layer], c[layer] = self.cells[layer](layer_input, h[layer], c[layer])
 
                 if self.use_residual:
-                    h[layer] = h[layer] + self.res_proj[layer](input_t)
+                    if layer == 0 and self.input_projection is not None:
+                        residual = self.input_projection(layer_input)
+                    else:
+                        residual = layer_input if layer_input.size(-1) == self.hidden_size else 0
+                    h[layer] = h[layer] + residual
 
                 if self.use_layer_norm:
                     h[layer] = self.layer_norm_layers[layer](h[layer])
 
-                input_t = h[layer]
+                layer_input = h[layer]
+
             outputs.append(h[-1])
 
         output = torch.stack(outputs)
@@ -76,5 +94,7 @@ class sLSTMLayer(nn.Module):
 
     def init_hidden(self, batch_size):
         """Initialize hidden and cell states for each layer."""
-        return ([torch.zeros(batch_size, self.hidden_size, device=self.device) for _ in range(self.num_layers)],
-                [torch.zeros(batch_size, self.hidden_size, device=self.device) for _ in range(self.num_layers)])
+        return (
+            [torch.zeros(batch_size, self.hidden_size, device=self.device) for _ in range(self.num_layers)],
+            [torch.zeros(batch_size, self.hidden_size, device=self.device) for _ in range(self.num_layers)],
+        )
