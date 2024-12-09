@@ -1,9 +1,11 @@
-import torch
-import torch.nn as nn
-from typing import Optional, Tuple, Union, Literal
 from mLSTM.network import mLSTMNetwork
 from sLSTM.network import sLSTMNetwork
 
+from typing import Optional, Tuple, Union, Literal
+import torch
+from torch import nn
+from pytorch_forecasting.models.base_model import BaseModel
+from pytorch_forecasting.metrics import SMAPE, Metric
 
 class SeriesDecomposition(nn.Module):
     """Implements series decomposition using learnable moving averages."""
@@ -24,21 +26,15 @@ class SeriesDecomposition(nn.Module):
         Returns:
             Tuple of (trend_component, seasonal_component)
         """
-
         batch_size, seq_len, n_features = x.shape
         x_reshaped = x.reshape(batch_size * n_features, 1, seq_len)
-
-
         trend = self.avg_pool(x_reshaped)
-
-
         trend = trend.reshape(batch_size, seq_len, n_features)
         seasonal = x - trend
 
         return trend, seasonal
 
-
-class xLSTMTime(nn.Module):
+class xLSTMTime(BaseModel):
     """
     Implementation of xLSTMTime architecture for time series forecasting.
     """
@@ -52,7 +48,9 @@ class xLSTMTime(nn.Module):
             num_layers: int = 1,
             decomposition_kernel: int = 25,
             dropout: float = 0.1,
-            device: Optional[torch.device] = None
+            loss: Metric = SMAPE(),
+            device: Optional[torch.device] = None,
+            **kwargs
     ):
         """
         Initialize xLSTMTime model.
@@ -67,7 +65,7 @@ class xLSTMTime(nn.Module):
             dropout: Dropout rate
             device: Torch device to use
         """
-        super(xLSTMTime, self).__init__()
+        super().__init__(loss=loss, **kwargs)
 
         if xlstm_type not in ['slstm', 'mlstm']:
             raise ValueError("xlstm_type must be either 'slstm' or 'mlstm'")
@@ -75,10 +73,8 @@ class xLSTMTime(nn.Module):
         self.xlstm_type = xlstm_type
         self.device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-
         self.decomposition = SeriesDecomposition(decomposition_kernel)
         self.input_linear = nn.Linear(input_size * 2, hidden_size)
-
         self.batch_norm = nn.BatchNorm1d(hidden_size)
 
         if xlstm_type == 'mlstm':
@@ -99,15 +95,16 @@ class xLSTMTime(nn.Module):
                 dropout=dropout,
                 device=self.device
             )
-        self.output_linear = nn.Linear(hidden_size, output_size)
 
+        self.output_linear = nn.Linear(hidden_size, output_size)
         self.instance_norm = nn.InstanceNorm1d(output_size)
 
     def forward(
             self,
             x: torch.Tensor,
             hidden_states: Optional[
-                Union[Tuple[torch.Tensor, torch.Tensor], Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]] = None
+                Union[Tuple[torch.Tensor, torch.Tensor], Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]
+            ] = None
     ) -> Tuple[torch.Tensor, Union[Tuple[torch.Tensor, torch.Tensor], Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]]:
         """
         Forward pass through the network.
@@ -122,12 +119,9 @@ class xLSTMTime(nn.Module):
         batch_size, seq_len, _ = x.shape
 
         trend, seasonal = self.decomposition(x)
-
         x = torch.cat([trend, seasonal], dim=-1)
-
         x = self.input_linear(x)
 
-        # Reshape for batch norm
         x = x.transpose(1, 2)
         x = self.batch_norm(x)
         x = x.transpose(1, 2)
@@ -141,10 +135,8 @@ class xLSTMTime(nn.Module):
         if isinstance(output, tuple):
             output = output[0]
 
-
         if output.dim() == 2:
             output = output.unsqueeze(0)
-
 
         output = self.output_linear(output)
 
@@ -158,7 +150,8 @@ class xLSTMTime(nn.Module):
             self,
             x: torch.Tensor,
             hidden_states: Optional[
-                Union[Tuple[torch.Tensor, torch.Tensor], Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]] = None
+                Union[Tuple[torch.Tensor, torch.Tensor], Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]
+            ] = None
     ) -> torch.Tensor:
         """
         Make predictions using the model.
@@ -172,3 +165,35 @@ class xLSTMTime(nn.Module):
         """
         output, _ = self.forward(x, hidden_states)
         return output
+
+    def training_step(self, batch, batch_idx):
+        """Defines a single step in the training loop."""
+        x, y = batch
+        y_pred, _ = self(x)
+        loss = self.loss(y_pred, y)
+        self.log("train_loss", loss)
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        """Defines a single step in the validation loop."""
+        x, y = batch
+        y_pred, _ = self(x)
+        loss = self.loss(y_pred, y)
+        self.log("val_loss", loss)
+        return loss
+
+    def test_step(self, batch, batch_idx):
+        """Defines a single step in the test loop."""
+        x, y = batch
+        y_pred, _ = self(x)
+        loss = self.loss(y_pred, y)
+        self.log("test_loss", loss)
+        return loss
+
+    def configure_optimizers(self):
+        """Configure optimizers and learning rate schedulers."""
+        optimizer = torch.optim.Adam(self.parameters(), lr=1e-3)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=10)
+        return {"optimizer": optimizer, "lr_scheduler": scheduler, "monitor": "val_loss"}
+
+
