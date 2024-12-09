@@ -71,7 +71,9 @@ class xLSTMTime(BaseModel):
             raise ValueError("xlstm_type must be either 'slstm' or 'mlstm'")
 
         self.xlstm_type = xlstm_type
-        self.device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self._device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.to(self._device)
+
 
         self.decomposition = SeriesDecomposition(decomposition_kernel)
         self.input_linear = nn.Linear(input_size * 2, hidden_size)
