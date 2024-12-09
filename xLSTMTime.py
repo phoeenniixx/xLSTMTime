@@ -168,34 +168,6 @@ class xLSTMTime(BaseModel):
         output, _ = self.forward(x, hidden_states)
         return output
 
-    def training_step(self, batch, batch_idx):
-        """Defines a single step in the training loop."""
-        x, y = batch
-        y_pred, _ = self(x)
-        loss = self.loss(y_pred, y)
-        self.log("train_loss", loss)
-        return loss
-
-    def validation_step(self, batch, batch_idx):
-        """Defines a single step in the validation loop."""
-        x, y = batch
-        y_pred, _ = self(x)
-        loss = self.loss(y_pred, y)
-        self.log("val_loss", loss)
-        return loss
-
-    def test_step(self, batch, batch_idx):
-        """Defines a single step in the test loop."""
-        x, y = batch
-        y_pred, _ = self(x)
-        loss = self.loss(y_pred, y)
-        self.log("test_loss", loss)
-        return loss
-
-    def configure_optimizers(self):
-        """Configure optimizers and learning rate schedulers."""
-        optimizer = torch.optim.Adam(self.parameters(), lr=1e-3)
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=10)
-        return {"optimizer": optimizer, "lr_scheduler": scheduler, "monitor": "val_loss"}
+    
 
 
